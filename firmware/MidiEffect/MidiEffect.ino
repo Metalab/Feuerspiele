@@ -1,9 +1,24 @@
 #include <MIDI.h>
+#include "Adafruit_WS2801.h"
+#include "SPI.h"
 
 int valvePins[4] = {11,12,13,14};
 int igniterPin = 10;
 long lastEffect = 0;
 long igniterSafetyTimeout = 10000; // 10 sec
+
+// LED strip - Arduino
+//uint8_t dataPin  = 2;
+//uint8_t clockPin = 3;
+
+// LED strip - Teensy 2.0
+uint8_t dataPin  = 1;
+uint8_t clockPin = 2;
+
+#define NUMPIXELS 16
+Adafruit_WS2801 strip = Adafruit_WS2801(NUMPIXELS, dataPin, clockPin);
+// Optional: leave off pin numbers to use hardware SPI
+
 
 struct Valve {
   int pin;
@@ -58,11 +73,30 @@ int noteToEffect(byte note) {
   return effect;
 }
 
-int (*mappingfunc)(byte) = octaveToEffect;
+int (*effectMappingfunc)(byte) = octaveToEffect;
+
+
+void hue2rgb(float h, uint32_t &rgb)
+{
+  int val = ((int)(h * 6 * 255)) % 255;
+  int i = h * 6;
+  if (i == 6) i = 5;
+  uint8_t q = 255 - val;
+  
+  switch (i) {
+  case 0: rgb = 0xff0000 | val << 8; break;
+  case 1: rgb = 0x00ff00 | q << 16; break;
+  case 2: rgb = 0x00ff00 | val; break;
+  case 3: rgb = 0x0000ff | q << 8; break;
+  case 4: rgb = 0x0000ff | val << 16; break;
+  case 5: rgb = 0xff0000 | q ; break;
+  }
+}
+
 
 void handleNoteOn(byte channel, byte pitch, byte velocity) {
 
-  int effect = mappingfunc(pitch);
+  int effect = effectMappingfunc(pitch);
   if (effect >= 0) {
     Serial.print("Effect On: ");
     Serial.println(effect, DEC);
@@ -77,10 +111,21 @@ void handleNoteOn(byte channel, byte pitch, byte velocity) {
     Serial.print("NoteOn: ");
     Serial.println(pitch, DEC);
   }
+
+  // 36..96 - 60 notes
+  float hue = 1.0f * (pitch - 36) / 60;
+  uint32_t rgb;
+  hue2rgb(hue, rgb);
+
+  for (uint8_t i=0;i<NUMPIXELS-1;i++) {
+    strip.setPixelColor(i+1, strip.getPixelColor(i));
+  }
+  strip.setPixelColor(0, rgb);
+  strip.show();
 }
 
 void handleNoteOff(byte channel, byte pitch, byte velocity) {
-  Valve::valves[mappingfunc(pitch)].off();
+  Valve::valves[effectMappingfunc(pitch)].off();
 }
 
 void setup()
@@ -96,16 +141,25 @@ void setup()
   MIDI.setHandleNoteOff(handleNoteOff);
 
   MIDI.begin(MIDI_CHANNEL_OMNI);
-  pinMode(CORE_RXD1_PIN, INPUT_PULLUP);
+#if defined(__AVR_ATmega32U4__) && defined(CORE_TEENSY)
+ pinMode(CORE_RXD1_PIN, INPUT_PULLUP);
+#endif
+ 
+  strip.begin();
+  for (int i=0; i < strip.numPixels(); i++) {
+    strip.setPixelColor(i, 0x00ff00);
+  }
+  strip.show();
 
   Serial.begin(9600);
-  Serial.println("Hello MIDI effect");
+  Serial.println("Hello MIDI effect (with LEDs)");
 }
 
 void loop()
 {
   MIDI.read();
   Valve::checkTimeouts();
+  
 
   // Manual mode
   if (Serial.available() > 0) {
